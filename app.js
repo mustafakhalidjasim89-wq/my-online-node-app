@@ -157,4 +157,127 @@ app.get('/', async (req, res) => {
             "label { font-weight: bold; display: block; margin-top: 15px; color: #475569; }" +
             "input, select, textarea { width:100%; padding:12px; margin-top:6px; margin-bottom:10px; border:1px solid #cbd5e1; border-radius:6px; box-sizing:border-box; font-size:14px; }" +
             "button { background: #0052cc; color:white; padding:14px; border:none; border-radius:6px; font-weight:bold; width:100%; cursor:pointer; font-size: 16px; }" +
-            ".btn-export { background: #10b981; margin-bottom: 20px; float: right; width:
+            ".btn-export { background: #10b981; margin-bottom: 20px; float: right; width: auto; padding: 10px 20px; font-size: 14px; }" +
+            ".btn-export:hover { background: #059669; }" +
+            "table { width:100%; border-collapse:collapse; margin-top:35px; font-size:14px; }" +
+            "th { background:#f1f5f9; text-align:left; padding:12px; color: #64748b; border-bottom: 2px solid #cbd5e1; }</style></head>" +
+            "<body><div class='card'>" +
+            "<h2>⚠️ Open New Site Ticket</h2>" +
+            "<form action='/raise-ticket' method='POST' enctype='multipart/form-data'>" +
+            "<label>Site ID</label><input type='text' name='siteId' placeholder='e.g. BAG-014' required />" +
+            "<label>Department / Issue Category</label><select name='activity'>" +
+            "<option value='Admin'>Admin</option>" +
+            "<option value='Power'>Power</option>" +
+            "<option value='Deployment'>Deployment</option></select>" +
+            "<label>Detailed Situation Notes</label><textarea name='notes' rows='3' placeholder='Describe issue details here...' required></textarea>" +
+            "<label>Attach Field Site Picture (Optional)</label><input type='file' name='image' accept='image/*' />" +
+            "<button type='submit'>Submit & Dispatch Ticket</button></form>" +
+            "<hr style='margin:40px 0; border:0; border-top:1px solid #e2e8f0;'/>" +
+            "<a href='/export-csv'><button class='btn-export'>📊 Export Data to Excel (CSV)</button></a>" +
+            "<h3>Live Network Tickets Monitor</h3><div style='overflow-x:auto;'><table>" +
+            "<tr><th>Ticket ID</th><th>Site ID</th><th>Category</th><th>Notes</th><th>Picture</th><th>Status</th></tr>" +
+            rows + "</table></div></div></body></html>";
+
+        res.send(htmlPage);
+    } catch (err) {
+        res.status(500).send("Critical layout error.");
+    }
+});
+
+// ==========================================
+// TICKET SUBMISSION ENGINE
+// ==========================================
+app.post('/raise-ticket', upload.single('image'), async (req, res) => {
+    try {
+        const { siteId, activity, notes } = req.body;
+        const ticketId = "TK-" + Math.floor(1000 + Math.random() * 9000);
+        
+        let imageUrl = "";
+        // Only trigger asset upload if a picture file was actually selected by the technician
+        if (req.file && process.env.CLOUD_NAME) {
+            try {
+                const result = await cloudinary.uploader.upload(req.file.path);
+                imageUrl = result.secure_url;
+            } catch (imgErr) {
+                console.error("Cloudinary bypass, image field blank:", imgErr.message);
+            }
+        }
+
+        const ticketObject = {
+            _id: isDatabaseConnected ? new mongoose.Types.ObjectId() : "mem_" + Date.now(),
+            ticketId,
+            siteId: siteId.toUpperCase().trim(),
+            activity,
+            notes,
+            imageUrl,
+            status: "Under Progress",
+            timestamp: new Date()
+        };
+
+        if (isDatabaseConnected) {
+            const newTicket = new Ticket(ticketObject);
+            await newTicket.save();
+        } else {
+            backupTicketsArray.unshift(ticketObject);
+        }
+
+        // Dispatch email alerts directly to MUSTAFAKHALIDJASIM89@GMAIL.COM
+        if (EMAIL_USER && EMAIL_PASS) {
+            const recipientEmail = getDepartmentEmail(activity);
+            let emailHtml = "<div style='font-family: Arial; border: 1px solid #eee; padding: 20px; border-radius: 8px;'>" +
+                "<h2 style='color: #0052cc;'>New Dispatch Ticket Alert</h2>" +
+                "<p><b>Ticket ID:</b> " + ticketId + "</p>" +
+                "<p><b>Site ID:</b> " + ticketObject.siteId + "</p>" +
+                "<p><b>Category:</b> " + activity + "</p>" +
+                "<p><b>Status:</b> Under Progress</p>" +
+                "<p><b>Field Notes:</b> " + notes + "</p>";
+            if (imageUrl) {
+                emailHtml += "<p><b>Field Photo:</b><br/><img src='" + imageUrl + "' width='400'/></p>";
+            } else {
+                emailHtml += "<p><i>No photo attached for this ticket submission.</i></p>";
+            }
+            emailHtml += "</div>";
+
+            const emailOptions = {
+                from: EMAIL_USER,
+                to: recipientEmail,
+                subject: "[Under Progress] " + activity + " Ticket " + ticketId + " Raised for Site " + ticketObject.siteId,
+                html: emailHtml
+            };
+
+            transporter.sendMail(emailOptions, (err, info) => {
+                if (err) console.error("Email dispatch failed:", err.message);
+                else console.log("Email routed successfully.");
+            });
+        }
+
+        res.redirect('/');
+    } catch (error) {
+        console.error("Critical submission crash:", error);
+        res.redirect('/');
+    }
+});
+
+// ==========================================
+// TICKET STATE CONTROLLER
+// ==========================================
+app.post('/update-status/:id', async (req, res) => {
+    try {
+        const { status } = req.body;
+        const targetId = req.params.id;
+
+        if (isDatabaseConnected && !targetId.startsWith("mem_") && targetId !== "backup_demo") {
+            await Ticket.findByIdAndUpdate(targetId, { status });
+        } else {
+            let match = backupTicketsArray.find(t => t._id === targetId);
+            if (match) match.status = status;
+        }
+        res.redirect('/');
+    } catch (err) {
+        res.redirect('/');
+    }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log("System initialization complete. Listening out on Port: " + PORT);
+});
