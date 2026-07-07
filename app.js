@@ -71,9 +71,9 @@ const transporter = nodemailer.createTransport({
 });
 
 function getDepartmentEmail(activity) {
-    if (activity === "Power/Rectifier Check") return "power-team@company.com";
-    if (activity === "Admin/Logistics") return "admin-team@company.com";
-    if (activity === "Site Upgrade (2.6 GHz)") return "deployment-team@company.com";
+    if (activity === "Power/Rectifier Check") return "mustafa.khalid@asiacell.com";
+    if (activity === "Admin/Logistics") return "mustafa.khalid@asiacell.com";
+    if (activity === "Site Upgrade (2.6 GHz)") return "mustafa.khalid@asiacell.com";
     return "operations-manager@company.com";
 }
 
