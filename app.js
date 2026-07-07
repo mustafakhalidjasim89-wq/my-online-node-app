@@ -66,8 +66,15 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: EMAIL_USER, pass: EMAIL_PASS }
+    host: 'smtp.office365.com', // Standard Exchange/O365 SMTP server
+    port: 587,
+    secure: false, // Must be false for TLS port 587
+    auth: { user: EMAIL_USER, pass: EMAIL_PASS },
+    tls: {
+        ciphers: 'SSLv3',
+        rejectUnauthorized: false // Prevents corporate firewalls from blocking the connection
+    }
+
 });
 
 function getDepartmentEmail(activity) {
