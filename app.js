@@ -1,29 +1,96 @@
 const express = require('express');
+const mongoose = require('mongoose');
+const nodemailer = require('nodemailer');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 const app = express();
+
 const PORT = process.env.PORT || 3000;
 
-// Middleware to handle form data and JSON
+// ==========================================
+// 1. CONFIGURATIONS & CLOUD SERVICES CODES
+// ==========================================
+// Replace these placeholders with your real credentials or use Environment Variables
+const MONGO_URI = process.env.MONGO_URI || "YOUR_MONGODB_ATLAS_CONNECTION_STRING";
+const EMAIL_USER = process.env.EMAIL_USER || "your-company-email@gmail.com";
+const EMAIL_PASS = process.env.EMAIL_PASS || "your-gmail-app-password";
+
+// Configure Cloudinary for Image Hosting
+cloudinary.config({ 
+  cloud_name: process.env.CLOUD_NAME || 'your_cloud_name', 
+  api_key: process.env.API_KEY || 'your_api_key', 
+  api_secret: process.env.API_SECRET || 'your_api_secret' 
+});
+
+// Setup Multer for local temporary file buffering
+const upload = multer({ dest: '/tmp/' });
+
+// Connect to Permanent MongoDB Cloud Database
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("Connected securely to Cloud Database"))
+  .catch(err => console.error("Database connection failed:", err));
+
+// Define the Ticket structure
+const TicketSchema = new mongoose.Schema({
+    ticketId: String,
+    siteId: String,
+    activity: String,
+    notes: String,
+    imageUrl: String,
+    status: { type: String, default: "Under Progress" }, // Automatic initial status
+    timestamp: { type: Date, default: Date.now }
+});
+const Ticket = mongoose.model('Ticket', TicketSchema);
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Temporary memory array to store submitted tasks
-let fieldTasks = [
-    { 
-        timestamp: new Date().toISOString(), 
-        siteId: "DEMO-01", 
-        activity: "Preventive Maintenance", 
-        notes: "Cleaned rectifier modules and checked DC power levels." 
-    }
-];
+// Setup Email Transporter
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: EMAIL_USER, pass: EMAIL_PASS }
+});
 
-// 1. Main Form Interface (HTML)
-app.get('/', (req, res) => {
-    let rows = fieldTasks.map(t => `
-        <tr>
-            <td style="padding:8px; border:1px solid #ddd;">${new Date(t.timestamp).toLocaleString()}</td>
-            <td style="padding:8px; border:1px solid #ddd;"><b>${t.siteId}</b></td>
-            <td style="padding:8px; border:1px solid #ddd;">${t.activity}</td>
-            <td style="padding:8px; border:1px solid #ddd;">${t.notes}</td>
+// Helper function to map activity categories to target email addresses
+function getDepartmentEmail(activity) {
+    switch(activity) {
+        case "Power/Rectifier Check":
+            return "power-team@company.com";
+        case "Admin/Logistics":
+            return "admin-team@company.com";
+        case "Site Upgrade (2.6 GHz)":
+        case "Deployment":
+            return "deployment-team@company.com";
+        default:
+            return "operations-manager@company.com"; // Fallback address
+    }
+}
+
+// ==========================================
+// 2. ROUTES & INTERFACES
+// ==========================================
+
+// Dashboard Route: View and manage tickets
+app.get('/', async (req, res) => {
+    const tickets = await Ticket.find().sort({ timestamp: -1 });
+    
+    let rows = tickets.map(t => `
+        <tr style="border-bottom: 1px solid #ddd;">
+            <td style="padding:10px;">${t.ticketId}</td>
+            <td style="padding:10px;"><b>${t.siteId}</b></td>
+            <td style="padding:10px;"><span style="background:#eee; padding:3px 6px; border-radius:4px;">${t.activity}</span></td>
+            <td style="padding:10px;">${t.notes}</td>
+            <td style="padding:10px;">
+                ${t.imageUrl ? `<a href="${t.imageUrl}" target="_blank"><img src="${t.imageUrl}" width="60" style="border-radius:4px;"/></a>` : 'No Image'}
+            </td>
+            <td style="padding:10px;">
+                <form action="/update-status/${t._id}" method="POST" style="display:inline;">
+                    <select name="status" onchange="this.form.submit()" style="padding:5px; border-radius:4px; font-weight:bold; background: ${t.status === 'Fixed' ? '#d4edda' : '#fff3cd'}">
+                        <option value="Under Progress" ${t.status === 'Under Progress' ? 'selected' : ''}>Under Progress</option>
+                        <option value="Fixed" ${t.status === 'Fixed' ? 'selected' : ''}>Fixed</option>
+                    </select>
+                </form>
+            </td>
         </tr>
     `).join('');
 
@@ -31,50 +98,51 @@ app.get('/', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Field Task Tracker</title>
+            <title>Company Operations Ticket Dispatcher</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f6f9; color: #333; }
-                .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                input, textarea, select { width: 100%; padding: 10px; margin: 8px 0 16px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
-                button { background-color: #007bff; color: white; padding: 12px; border: none; border-radius: 4px; width: 100%; cursor: pointer; font-size: 16px; }
-                button:hover { background-color: #0056b3; }
-                .download-btn { background-color: #28a745; margin-top: 15px; text-align: center; display: block; text-decoration: none; color: white; padding: 12px; border-radius: 4px; font-weight: bold; }
-                .download-btn:hover { background-color: #218838; }
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+                body { font-family: sans-serif; background: #f0f2f5; margin: 20px; }
+                .card { max-width: 900px; margin: 0 auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+                input, select, textarea { width:100%; padding:10px; margin-top:5px; margin-bottom:15px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box;}
+                button { background: #0052cc; color:white; padding:12px; border:none; border-radius:4px; font-weight:bold; width:100%; cursor:pointer;}
+                table { width:100%; border-collapse:collapse; margin-top:25px; }
+                th { background:#f4f5f7; text-align:left; padding:10px; }
             </style>
         </head>
         <body>
-            <div class="container">
-                <h2>📋 Field Task Activity Logger</h2>
-                <form action="/submit-task" method="POST">
+            <div class="card">
+                <h2>⚠️ Open a New Site Ticket</h2>
+                <form action="/raise-ticket" method="POST" enctype="multipart/form-data">
                     <label><b>Site ID:</b></label>
-                    <input type="text" name="siteId" placeholder="e.g. BAG-012" required>
+                    <input type="text" name="siteId" placeholder="e.g. IRQ-782" required />
 
-                    <label><b>Task Activity Type:</b></label>
+                    <label><b>Department / Issue Category:</b></label>
                     <select name="activity">
-                        <option value="Site Upgrade (2.6 GHz)">Site Upgrade (2.6 GHz)</option>
-                        <option value="Preventive Maintenance">Preventive Maintenance</option>
-                        <option value="Corrective Maintenance">Corrective Maintenance</option>
-                        <option value="Power/Rectifier Check">Power/Rectifier Check</option>
-                        <option value="Other Operations">Other Operations</option>
+                        <option value="Power/Rectifier Check">Power/Rectifier Check (Sends to Power Team)</option>
+                        <option value="Admin/Logistics">Admin/Logistics (Sends to Admin Team)</option>
+                        <option value="Site Upgrade (2.6 GHz)">Site Upgrade / Deployment (Sends to Deployment Team)</option>
                     </select>
 
-                    <label><b>Activity Details / Notes:</b></label>
-                    <textarea name="notes" rows="4" placeholder="Enter status notes, parts replaced, or technician alerts..." required></textarea>
+                    <label><b>Detailed Situation Notes:</b></label>
+                    <textarea name="notes" rows="3" required></textarea>
 
-                    <button type="submit">Submit Task Log</button>
+                    <label><b>Attach Field Site Picture:</b></label>
+                    <input type="file" name="image" accept="image/*" required />
+
+                    <button type="submit">Raise Ticket</button>
                 </form>
 
-                <a href="/export-excel" class="download-btn">📥 Download Logs for Excel (.CSV)</a>
-
-                <h3>Recent Logged Activities</h3>
+                <hr style="margin:30px 0; border:0; border-top:1px solid #ddd;"/>
+                
+                <h3>Live Network Tickets Monitor</h3>
                 <table>
-                    <tr style="background-color: #eee;">
-                        <th style="padding:8px; border:1px solid #ddd; text-align:left;">Time</th>
-                        <th style="padding:8px; border:1px solid #ddd; text-align:left;">Site ID</th>
-                        <th style="padding:8px; border:1px solid #ddd; text-align:left;">Activity</th>
-                        <th style="padding:8px; border:1px solid #ddd; text-align:left;">Notes</th>
+                    <tr>
+                        <th>Ticket ID</th>
+                        <th>Site ID</th>
+                        <th>Category</th>
+                        <th>Notes</th>
+                        <th>Picture</th>
+                        <th>Status</th>
                     </tr>
                     ${rows}
                 </table>
@@ -84,40 +152,68 @@ app.get('/', (req, res) => {
     `);
 });
 
-// 2. Route to handle Form Submission
-app.post('/submit-task', (req, res) => {
-    const { siteId, activity, notes } = req.body;
-    
-    // Add the new submission to our online list
-    fieldTasks.push({
-        timestamp: new Date().toISOString(),
-        siteId: siteId.trim().toUpperCase(),
-        activity,
-        notes: notes.trim()
-    });
+// Route to handle dynamic ticket creation, image uploading, and email dispatching
+app.post('/raise-ticket', upload.single('image'), async (req, res) => {
+    try {
+        const { siteId, activity, notes } = req.body;
+        
+        // Generate unique readable Ticket ID
+        const ticketId = "TK-" + Math.floor(1000 + Math.random() * 9000);
+        
+        // Upload the file image safely to Cloudinary Cloud storage
+        let imageUrl = "";
+        if (req.file) {
+            const result = await cloudinary.uploader.upload(req.file.path);
+            imageUrl = result.secure_url;
+        }
 
-    // Redirect back to home to see updated list
+        // Save Ticket parameters safely to MongoDB
+        const newTicket = new Ticket({
+            ticketId,
+            siteId: siteId.toUpperCase().trim(),
+            activity,
+            notes,
+            imageUrl,
+            status: "Under Progress" // Automatic assignment
+        });
+        await newTicket.save();
+
+        // Target Specific Email Recipients Based on Category selection
+        const recipientEmail = getDepartmentEmail(activity);
+
+        const emailOptions = {
+            from: EMAIL_USER,
+            to: recipientEmail,
+            subject: `[${newTicket.status}] Ticket ${ticketId} raised for Site ${newTicket.siteId}`,
+            html: `
+                <h3>New Ticket Dispatched Automatically</h3>
+                <p><b>Ticket ID:</b> ${ticketId}</p>
+                <p><b>Site ID:</b> ${newTicket.siteId}</p>
+                <p><b>Category:</b> ${activity}</p>
+                <p><b>Current Status:</b> Under Progress</p>
+                <p><b>Field Notes:</b> ${notes}</p>
+                ${imageUrl ? `<p><b>Field Photo Attached:</b> <br/><img src="${imageUrl}" width="400"/></p>` : ""}
+            `
+        };
+
+        // Fire Email async
+        transporter.sendMail(emailOptions, (err, info) => {
+            if (err) console.error("Email Routing Error:", err);
+            else console.log("Alert email pushed to: " + recipientEmail);
+        });
+
+        res.redirect('/');
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error compiling ticket application execution flow.");
+    }
+});
+
+// Route to modify/update status later from the dropdown options
+app.post('/update-status/:id', async (req, res) => {
+    const { status } = req.body;
+    await Ticket.findByIdAndUpdate(req.params.id, { status });
     res.redirect('/');
 });
 
-// 3. Route to Export Data directly into Excel format
-app.get('/export-excel', (req, res) => {
-    // Add standard CSV headers
-    let csvContent = "Timestamp,Site ID,Activity,Notes\n";
-    
-    // Format row entries safely (replacing quotes/newlines to keep columns clean)
-    fieldTasks.forEach(t => {
-        let cleanNotes = t.notes.replace(/"/g, '""').replace(/\n/g, ' ');
-        csvContent += `"${t.timestamp}","${t.siteId}","${t.activity}","${cleanNotes}"\n`;
-    });
-
-    // Set HTTP headers so the browser triggers a file download
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=Field_Task_Activities.csv');
-    
-    res.status(200).send(csvContent);
-});
-
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`System initialized running on port ${PORT}`));
